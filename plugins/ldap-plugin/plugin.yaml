@@ -1,0 +1,52 @@
+plugins:
+  # Name could be anything, this name is what appears on the beginning of operation
+  # mappings.
+  ldap_plugin:
+    executor: central_deployment_agent
+    source: ldap-plugin
+
+node_types:
+  ldap_operator:
+    derived_from: cloudify.nodes.Root
+    properties:
+      ldap_config:
+        default:
+          server_url:
+            type: string
+            default: ldap://localhost:3893
+            description: LDAP server URL
+          user:
+            type: string
+            description: LDAP user
+          password:
+            type: string
+            description: LDAP password
+      rules:
+        default: []
+        description: list of rules
+        # rule format
+        #    - user: <ldap user>
+        #      attribute: <user attribute>
+        #      actions:
+        #        - cloudify_auth:
+        #            host:
+        #            port:
+        #            user:
+        #            password:
+        #            tenant:
+        #            token:
+        #          deployment_id: <cloudify deployment id>
+        #          workflow_id: <cloudify workflow id> 
+        #          workflow_args:
+        #            arg1: val1
+        #            arg2: val2
+        
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        start:
+          implementation: ldap_plugin.cfy_ldap_operator.tasks.start
+          executor: central_deployment_agent
+        stop:
+          implementation: ldap_plugin.cfy_ldap_operator.tasks.stop
+          executor: central_deployment_agent
+

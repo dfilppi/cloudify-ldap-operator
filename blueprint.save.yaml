@@ -1,0 +1,65 @@
+tosca_definitions_version: cloudify_dsl_1_3
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/4.5/types.yaml
+  - plugins/ldap-plugin/plugin.yaml
+
+inputs:
+  cloudify_credentials:
+    default: {}
+    description: the credentials needed by the operator (operator specific)
+
+
+node_templates:
+
+  host:
+    type: cloudify.nodes.Compute
+    properties:
+      agent_config:
+        install_method: none
+
+  operator:
+    type: ldap_operator
+    properties:
+      ldap_config:
+        server_url: ldap://localhost:3893
+        user: uid=admin,ou=system
+        password: secret
+      rules:
+#        - type: user   # user, single, member
+#          key: cn=hackers,ou=superheros,dc=glauth,dc=com
+#          attribute: systemAccess #optional
+#          condition: 
+#            # equals, contains, member (of group)
+#            # and negative (not) of each
+#            type: member
+#            value: superheros
+#          actions:
+#            - cloudify_auth:
+#                user: admin
+#                password: admin
+#                tenant: default_tenant
+#                host: 10.239.2.83
+#              deployment_id: b
+#              workflow_id: install
+#              retries: 3
+#        - type: user   # user, single, member
+#          key: cn=hackers,ou=superheros,dc=glauth,dc=com
+#          attribute: systemAccess #optional
+#          condition: 
+#            # equals, contains, member (of group)
+#            # and negative (^) of each
+#            type: ^member
+#            value: superheros
+#          actions:
+#            - cloudify_auth:
+#                user: admin
+#                password: admin
+#                tenant: default_tenant
+#                host: 10.239.2.83
+#              deployment_id: b
+#              workflow_id: uninstall
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: host  
+
