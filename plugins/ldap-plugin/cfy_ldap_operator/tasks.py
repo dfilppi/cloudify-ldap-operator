@@ -16,6 +16,7 @@
 from cloudify import ctx
 from cloudify_rest_client import CloudifyClient
 from cloudify import manager
+import json
 import ldap
 from flask import Flask
 from threading import Thread
@@ -79,8 +80,18 @@ def start(**kwargs):
 
     # Start REST server
     app = Flask(__name__)
+
+    # init stats
+    stats = {}
+    stats['errcnt'] = 0
+    stats['actions'] = []
+
+    # init config
+    config = {}
+    config['log_location'] = '/tmp/log'
+
     try:
-        set_routes(app)
+        set_routes(app, ctx.node.properties, stats, config)
         rest = Thread(target=app.run, kwargs={"debug":False})
         rest.start()
     except Exception as e:
@@ -89,7 +100,7 @@ def start(**kwargs):
 
     # TODO Deep copy of properties to runtime_properties.
     #      To enable changes at runtime
-    operate(client, ctx.node.properties)
+    operate(client, ctx.node.properties, stats)
 
     os._exit(0)
 
@@ -106,8 +117,8 @@ def stop(**kwargs):
         ctx.logger.error("kill failed for pid ".format(pid))
 
 
-def operate(client, properties):
-    action_mgr = ActionQueueManager(log)
+def operate(client, properties, stats):
+    action_mgr = ActionQueueManager(stats, log)
 
     log("INFO: LDAP operator starting")
     # authenticate (simple for now)
@@ -120,7 +131,9 @@ def operate(client, properties):
         ld.simple_bind_s(properties['ldap_config']['user'],
                                properties['ldap_config']['password'])
     except Exception as e:
-        log("ERROR: ldap connection failed: {}\n".format(e.message))
+        stats['errcnt'] += 1
+        stats['last_error'] = "ldap connect failed: " + str(e.message)
+        log("ERROR: ldap connection failed: {}".format(e.message))
 
     # main loop
 
@@ -135,10 +148,12 @@ def operate(client, properties):
         for rstate in rule_state:
             try:
                 if rstate.state == rstate.ST_INITIAL:
-                    trigger_rule(action_mgr, ld, rstate)
+                    trigger_rule(action_mgr, ld, rstate, stats)
                 else:
                     check_rule(rstate)
             except Exception as e:
+                stats['errcnt'] += 1
+                stats['last_error'] = e.message
                 log("ERROR: caught exception " + e.message)
         time.sleep(3)
 
@@ -161,7 +176,7 @@ def check_rule(rstate):
         log("ERROR: illegal state: " + rstate.state)
 
 
-def trigger_rule(action_mgr, ld, rstate):
+def trigger_rule(action_mgr, ld, rstate, stats):
     ''' Starts a rules actions '''
 
     log("INFO: processing rule")
@@ -171,9 +186,11 @@ def trigger_rule(action_mgr, ld, rstate):
         try:
             res = ld.search_s(rule['key'], ldap.SCOPE_SUBTREE,"objectclass=*")
         except Exception as e:
+            stats['errcnt'] += 1
+            stats['last_error'] = "ldap search exc=" + str(e.message)
             log("Caught exception in user key search: {}".format(e.message))
             return
-        id = process_attr_scan_case(action_mgr, rstate, res, True)
+        id = process_attr_scan_case(action_mgr, rstate, res, True, stats)
         if not id: 
             return
         rstate.id = id
@@ -181,7 +198,7 @@ def trigger_rule(action_mgr, ld, rstate):
         log("ERROR: unknown rule type '{}'".format(rule['type']))
 
 
-def process_attr_scan_case(action_mgr, rstate, res, pos):
+def process_attr_scan_case(action_mgr, rstate, res, pos, stats):
     ''' Searches a collection for an entry with the named
         attribute that matches the condition
     '''
@@ -197,12 +214,18 @@ def process_attr_scan_case(action_mgr, rstate, res, pos):
                     rule['condition']['value'] in entry[1][rule['attribute']]):
                     id = action_mgr.add(rule['actions'])
                     rstate.lastval[entry[0]] = True
+                    stats['actions'].append("TRIGGER:"+json.dumps(rstate.rule))
+                    if len(stats['actions']) > 100:
+                        del(stats['actions'][0])
                     return id
             elif rule['condition']['type'] == '^contains':
                 if lastval_from_rstate(rstate,entry[0]) and (
                     rule['condition']['value'] not in entry[1][rule['attribute']]):
                     id = action_mgr.add(rule['actions'])
                     rstate.lastval[entry[0]] = False
+                    stats['actions'].append("TRIGGER:"+json.dumps(rstate.rule))
+                    if len(stats['actions']) > 100:
+                        del(stats['actions'][0])
                     return id
         else:
             log("DEBUG: key not in entry")
@@ -215,35 +238,6 @@ def lastval_from_rstate(rstate, key):
         return False
     else:
         return rstate.lastval
-
-
-def process_member_case(action_mgr, rstate, res, pos):
-    '''  Handles processing the "member" rule type
-         - rule: the rule config
-         - pos: positive case if True ( in group )
-    '''
-    rule = rstate.rule
-    cond = (rule['condition']['value'] in res['ou'])
-    if not pos:
-        cond = not cond
-
-    if cond:
-        log("DEBUG: rule condition triggered: " +
-            rule['condition']['value'])
-        if not rstate.lastval == cond:
-            rstate.lastval = cond
-            log("INFO: Starting actions {}".format(rule))
-            id = action_mgr.add(rule['actions'])
-            return id
-        else:
-            log("DEBUG: rule {} already triggered, skipping".format(
-                rule['condition']['value']))
-            return None
-    else:
-        log("DEBUG: rule condition not triggered: " +
-            rule['condition']['value'])
-        rstate.lastval = not cond
-        return None
 
 
 def close_fds(leave_open=[0, 1, 2]):
@@ -267,13 +261,14 @@ class ActionQueueManager:
     ST_COMPLETE = "complete"
     ST_ERROR = "error"
 
-    def __init__(self, logger):
+    def __init__(self, stats, logger):
         self._pending = []
         self._queue = []
         self._die = False
         self._tid = thread.start_new_thread(self.run, ())
         self._lock = thread.allocate_lock()
-        log = logger
+        self._logger = logger
+        self._stats = stats
         self._results = {}
 
     @property
@@ -296,17 +291,17 @@ class ActionQueueManager:
 
     def run(self):
         try:
-            log("AQM: starting")
+            self._logger("AQM: starting")
             while not self._die:
                 # add pending
-                log("AQM: pending len = "+str(len(self._pending)))
+                self._logger("AQM: pending len = "+str(len(self._pending)))
                 with self._lock:
                     while len(self._pending) > 0:
-                        log("AQM: adding pending")
+                        self._logger("AQM: adding pending")
                         self._queue.append(self._pending.pop(0))
 
                 # consume _queue
-                log("AQM: queue len = "+str(len(self._queue)))
+                self._logger("AQM: queue len = "+str(len(self._queue)))
                 abort = False
                 while len(self._queue) > 0:
                     action = self._queue[0]
@@ -317,19 +312,20 @@ class ActionQueueManager:
                         del self._queue[0]
                         continue
 
-                    log("AQM: processing action queue")
+                    self._logger("AQM: processing action queue")
 
                     # sanity check for deployment id
                     # abort rule if doesn't exist
                     if not self._deployment_exists(client, action):
-                        log("ERROR: AQM: configured deployment {} doesn't exist".format(
+                        self._add_error("deployment {} doesn't exist".format(action['deployment_id']))
+                        self._logger("ERROR: AQM: configured deployment {} doesn't exist".format(
                             action['deployment_id']))
-                        log("       ABORTING RULE")
+                        self._logger("       ABORTING RULE")
                         abort = True
                         break
 
                     if action.status == action.STATUS_PENDING:
-                        log("Starting workflow {} on deployment {}".format(
+                        self._logger("Starting workflow {} on deployment {}".format(
                             action._action['workflow_id'],
                             action._action['deployment_id']))
                         # start workflow
@@ -341,49 +337,51 @@ class ActionQueueManager:
                                 action._action['deployment_id'],
                                 action._action['workflow_id'], wfargs)
                         except Exception as e:
-                            log("ERROR: caught exception: "+e.message)
+                            self._add_error("exception: " +e.message)
+                            self._logger("ERROR: caught exception: "+e.message)
                             if action.tries > action.retry_max:
-                                log("retries exhausted, aborting")
+                                self._logger("retries exhausted, aborting")
                                 abort = True
                                 break
                             continue
 
+                        self._add_action("started execution "+execution.id)
                         action.set_attr(action.ATTR_EXID, execution.id)
                         action.status = action.STATUS_STARTED
 
                     elif action.status == action.STATUS_STARTED:
-                        log("DEBUG: action started, checking status")
+                        self._logger("DEBUG: action started, checking status")
                         # running execution, check if complete
                         try:
                             execution = client.executions.get(
                                 action.get_attr(action.ATTR_EXID))
                         except Exception as e:
-                            log("exception caught getting execution:" +
+                            self._logger("exception caught getting execution:" +
                                 e.message)
                             abort = True
                             break
                         status = execution.status
                         if status == action.EXEC_FAILED:
-                            log("execution returned failed status")
+                            self._logger("execution returned failed status")
                             action.status = action.STATUS_ERROR
                             abort = True
                             break
                         elif status == action.EXEC_CANCELLED:
-                            log("execution returned cancelled status")
+                            self._logger("execution returned cancelled status")
                             action.status = action.STATUS_CANCELLED
                             abort = True
                             break
                         elif status == action.EXEC_DONE:
-                            log("execution complete")
+                            self._logger("execution complete")
                             del self._queue[0]
                         else:
-                            log("INFO: got status=" + str(status))
+                            self._logger("INFO: got status=" + str(status))
                             time.sleep(4)
 
                 # TODO : 2 seconds is arbitrary
                 if abort:
-                    #log("INFO: processing abort of " + self._queue[0]['__id'])
-                    log("INFO: processing abort")
+                    #self._logger("INFO: processing abort of " + self._queue[0]['__id'])
+                    self._logger("INFO: processing abort")
                     # consume any remaining tasks
                     while len(self._queue) > 0:
                         action = self._queue[0]
@@ -394,7 +392,16 @@ class ActionQueueManager:
 
                 time.sleep(2)
         except Exception as e:
-            log("ERROR: AQM exception: "+e.message)
+            self._logger("ERROR: AQM exception: "+e.message)
+
+    def _add_action(self, action):
+        self._stats['actions'] = action
+        while len(self._stats['actions']) > 100:
+            del self._stats['actions'][0]
+
+    def _add_error(self, error):
+        self._stats['errcnt'] += 1
+        self._stats['last_error'] = error
 
     def _deployment_exists(self, client, action):
         did = action._action['deployment_id']
@@ -486,7 +493,19 @@ class RuleProcessStatus:
 # REST API
 ############################
 
-def set_routes(app):
+def set_routes(app, properties, stats, config):
     @app.route('/')
     def hello_world():
-        return 'Hello, World!'
+        return 'valid paths = /rules, /stats, /config'
+
+    @app.route('/rules')
+    def get_rules():
+        return (json.dumps(properties['rules']))
+
+    @app.route('/stats')
+    def get_stats():
+        return (json.dumps(stats))
+
+    @app.route('/config')
+    def get_config():
+        return (json.dumps(config))
