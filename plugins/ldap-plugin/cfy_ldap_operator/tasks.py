@@ -17,13 +17,14 @@ from cloudify import ctx
 from cloudify_rest_client import CloudifyClient
 from cloudify import manager
 import ldap
+from flask import Flask
+from threading import Thread
 from datetime import datetime
 import time
 import os
 import thread
 import uuid
 import copy
-
 
 def start(**kwargs):
     log("Starting LDAP operator")
@@ -71,6 +72,20 @@ def start(**kwargs):
         os.close(w)
         os._exit(0)
     os.close(w)
+
+    # Needed by Flask
+    os.open("/dev/null", os.O_RDONLY)
+    os.open("/dev/null", os.O_WRONLY)
+
+    # Start REST server
+    app = Flask(__name__)
+    try:
+        set_routes(app)
+        rest = Thread(target=app.run, kwargs={"debug":False})
+        rest.start()
+    except Exception as e:
+        log(str(e))
+        os._exit(0)
 
     # TODO Deep copy of properties to runtime_properties.
     #      To enable changes at runtime
@@ -466,3 +481,12 @@ class RuleProcessStatus:
     @property
     def id(self):
         self._id = id
+
+############################
+# REST API
+############################
+
+def set_routes(app):
+    @app.route('/')
+    def hello_world():
+        return 'Hello, World!'

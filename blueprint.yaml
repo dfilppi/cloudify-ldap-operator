@@ -23,6 +23,7 @@ node_templates:
   operator:
     type: ldap_operator
     properties:
+      rest_port: 5000
       ldap_config:
         server_url: ldap://10.0.2.2:10389
         user: uid=admin,ou=system

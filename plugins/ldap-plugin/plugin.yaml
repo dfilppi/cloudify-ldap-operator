@@ -11,6 +11,10 @@ node_types:
   ldap_operator:
     derived_from: cloudify.nodes.Root
     properties:
+      rest_port:
+        description: REST API listening port
+        default: 5000
+        type: integer
       ldap_config:
         default:
           server_url:

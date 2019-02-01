@@ -36,7 +36,8 @@ setup(
     install_requires=[
         # Necessary dependency for developing plugins, do not remove!
         "cloudify-common>=4.5",
-        "python-ldap>=3.1.0"
+        "python-ldap>=3.1.0",
+        "Flask>=1.0.2",
     ],
     test_requires=[
         "cloudify-common>=4.5",
