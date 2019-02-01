@@ -15,6 +15,7 @@
 
 from cloudify import ctx
 from cloudify_rest_client import CloudifyClient
+from cloudify import manager
 import ldap
 from datetime import datetime
 import time
@@ -28,6 +29,16 @@ def start(**kwargs):
     log("Starting LDAP operator")
     ''' Starts the operator process
     '''
+
+    # For DEBUGGING locally
+    if ctx._local:
+        client = CloudifyClient(
+            host = '10.239.2.83',
+            username = 'admin',
+            password = 'admin',
+            tenant = 'default_tenant')
+    else:
+        client = manager.get_rest_client()
 
     r,w = os.pipe()
     pid = os.fork()
@@ -63,7 +74,7 @@ def start(**kwargs):
 
     # TODO Deep copy of properties to runtime_properties.
     #      To enable changes at runtime
-    operate(ctx.node.properties)
+    operate(client, ctx.node.properties)
 
     os._exit(0)
 
@@ -80,7 +91,7 @@ def stop(**kwargs):
         ctx.logger.error("kill failed for pid ".format(pid))
 
 
-def operate(properties):
+def operate(client, properties):
     action_mgr = ActionQueueManager(log)
 
     log("INFO: LDAP operator starting")
@@ -151,38 +162,6 @@ def trigger_rule(action_mgr, ld, rstate):
         if not id: 
             return
         rstate.id = id
-
-#    elif rule['type'] == 'user':
-#        # Positive case
-#        if rule['condition']['type'] == 'member':
-#            id = process_member_case(action_mgr, rstate, res, True)
-#            if not id:
-#                return
-#            rstate.id = id
-#        elif rule['condition']['type'] =='^member':
-#            id = process_member_case(action_mgr, rstate, res, False)
-#            if not id:
-#                return
-#            rstate.id = id
-#        else:
-#            rstate.state = rstate.ST_ERROR
-#            log("ERROR: unknown user rule condition:"+
-#                 rule['condition']['type'])
-#    #TODO
-#    elif rule['type'] == 'single':
-#        try:
-#            if rule['condition']['type'] == 'equals':
-#                log("WARN: condition equals unimplemented")
-#            elif rule['condition']['type'] == 'contains':
-#                log("INFO: processing contains condition")
-#
-#        except Exception as e:
-#            log("Caught exception in key search: {}".format(e.message))
-#
-#    #TODO
-#    elif rule['type'] == 'group':
-#        pass
-
     else:
         log("ERROR: unknown rule type '{}'".format(rule['type']))
 
@@ -324,11 +303,6 @@ class ActionQueueManager:
                         continue
 
                     log("AQM: processing action queue")
-                    try:
-                        client = self._get_client(action)
-                    except Exception as e:
-                        log("AQM: caught client exception:"+e.message)
-                        continue
 
                     # sanity check for deployment id
                     # abort rule if doesn't exist
@@ -406,20 +380,6 @@ class ActionQueueManager:
                 time.sleep(2)
         except Exception as e:
             log("ERROR: AQM exception: "+e.message)
-
-    def _get_client(self, action):
-        cfy_host = action._action['cloudify_auth']['host']
-        try:
-            # TODO: These should be cached for reuse
-            client = CloudifyClient(cfy_host,
-                                    username=action._action['cloudify_auth']['user'],
-                                    password=action._action['cloudify_auth']['password'],
-                                    tenant=action._action['cloudify_auth']['tenant'])
-        except Exception as e:
-            log("connection to cloudify manager failed: "+e.message)
-            raise
-
-        return client
 
     def _deployment_exists(self, client, action):
         did = action._action['deployment_id']

@@ -35,10 +35,12 @@ setup(
     zip_safe=False,
     install_requires=[
         # Necessary dependency for developing plugins, do not remove!
-        "cloudify-common>=4.5"
+        "cloudify-common>=4.5",
+        "python-ldap>=3.1.0"
     ],
     test_requires=[
-        "cloudify-common>=4.5"
+        "cloudify-common>=4.5",
+        "python-ldap>=3.1.0",
         "nose"
     ]
 )

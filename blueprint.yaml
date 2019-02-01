@@ -4,6 +4,7 @@ imports:
 #  - http://www.getcloudify.org/spec/cloudify/4.5/types.yaml
   - types.yaml
   - plugins/ldap-plugin/plugin.yaml
+#  - plugin:cloudify-ldap-operator-plugin
 
 inputs:
   cloudify_credentials:
@@ -36,30 +37,19 @@ node_templates:
             type: contains
             value: group1
           actions:
-            - cloudify_auth:
-                user: admin
-                password: admin
-                tenant: default_tenant
-                host: 10.239.2.83
-              deployment_id: b
+            - deployment_id: b
               workflow_id: install
               retries: 3
-#        - type: user   # user, single, member
-#          key: cn=hackers,ou=superheros,dc=glauth,dc=com
-#          attribute: systemAccess #optional
+#        - type: attr_scan
+#          key: ou=people,o=cloudify,dc=example,dc=com
+#          attribute: ou
 #          condition: 
-#            # equals, contains, member (of group)
-#            # and negative (^) of each
-#            type: ^member
-#            value: superheros
+#            type: ^contains
+#            value: group1
 #          actions:
-#            - cloudify_auth:
-#                user: admin
-#                password: admin
-#                tenant: default_tenant
-#                host: 10.239.2.83
-#              deployment_id: b
+#            - deployment_id: b
 #              workflow_id: uninstall
+#              retries: 3
     relationships:
       - type: cloudify.relationships.contained_in
         target: host  

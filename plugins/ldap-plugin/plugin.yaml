@@ -2,6 +2,8 @@ plugins:
   # Name could be anything, this name is what appears on the beginning of operation
   # mappings.
   ldap_plugin:
+    package_name: cloudify-ldap-operator-plugin
+    package_version: '0.1'
     executor: central_deployment_agent
     source: ldap-plugin
 
@@ -28,13 +30,6 @@ node_types:
         #    - user: <ldap user>
         #      attribute: <user attribute>
         #      actions:
-        #        - cloudify_auth:
-        #            host:
-        #            port:
-        #            user:
-        #            password:
-        #            tenant:
-        #            token:
         #          deployment_id: <cloudify deployment id>
         #          workflow_id: <cloudify workflow id> 
         #          workflow_args:
